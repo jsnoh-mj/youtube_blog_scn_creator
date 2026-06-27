@@ -13,6 +13,6 @@ Travel content automation system for creating YouTube and blog scenes.
 
 ### previous - 1 feedback and request
 
-### previous - 3 feedback and request
+### previous - 2 feedback and request
 
 ### previous - 3 feedback and request
