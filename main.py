@@ -4,6 +4,10 @@ import cv2
 import subprocess
 from google import genai
 from google.genai import types
+from dotenv import load_dotenv
+
+# .env 파일에서 환경변수 로드
+load_dotenv()
 
 class TravelContentOrchestrator:
     def __init__(self, target_dir):
@@ -13,9 +17,13 @@ class TravelContentOrchestrator:
         self.yt_draft_path = "youtube_scenario_draft.md"
         self.blog_draft_path = "blogpost_scenario_draft.md"
         
-        # Google AI Studio 무료 API 키 로드 (환경변수 또는 직접 입력)
-        # os.environ["GEMINI_API_KEY"] = "AIzaSy..." 형태로 등록해두면 편리합니다.
-        api_key = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6LdrLRiLI0PBjXpJV-TkKsr1ebHKLRcCAoHy_WYY_YJZA")
+        # Google AI Studio 무료 API 키 로드 (환경변수만 사용)
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            print("[Error] GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
+            print("[Info] PowerShell에서 다음을 실행해주세요:")
+            print("       $env:GEMINI_API_KEY = 'your-api-key-here'")
+            sys.exit(1)
         self.client = genai.Client(api_key=api_key)
         # 무료 한도가 높고 빠른 2.5-flash를 기본 엔진으로 설정
         self.model_name = "gemini-2.5-flash" 
