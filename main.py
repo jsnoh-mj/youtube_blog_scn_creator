@@ -12,11 +12,16 @@ load_dotenv()
 class TravelContentOrchestrator:
     def __init__(self, target_dir):
         self.target_dir = target_dir
-        self.filelist_path = os.path.join(target_dir, "filelist.md")
+        # 사진 디렉토리명 마지막 부분으로 결과 폴더 생성
+        dir_name = os.path.basename(target_dir)
+        self.output_dir = os.path.join(target_dir, dir_name)
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        self.filelist_path = os.path.join(self.output_dir, "filelist.md")
         self.instruction_path = "project_instructions.md"
-        self.yt_draft_path = os.path.join(target_dir, "youtube_scenario_draft.md")
-        self.blog_draft_path = os.path.join(target_dir, "blogpost_scenario_draft.md")
-        self.ai_raw_output_path = os.path.join(target_dir, "ai_raw_output.md")
+        self.yt_draft_path = os.path.join(self.output_dir, "youtube_scenario_draft.md")
+        self.blog_draft_path = os.path.join(self.output_dir, "blogpost_scenario_draft.md")
+        self.ai_raw_output_path = os.path.join(self.output_dir, "ai_raw_output.md")
         
         # Google AI Studio 무료 API 키 로드 (환경변수만 사용)
         api_key = os.environ.get("GEMINI_API_KEY")
