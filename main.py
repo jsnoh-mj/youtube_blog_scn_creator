@@ -12,10 +12,11 @@ load_dotenv()
 class TravelContentOrchestrator:
     def __init__(self, target_dir):
         self.target_dir = target_dir
-        self.filelist_path = "filelist.md"
+        self.filelist_path = os.path.join(target_dir, "filelist.md")
         self.instruction_path = "project_instructions.md"
-        self.yt_draft_path = "youtube_scenario_draft.md"
-        self.blog_draft_path = "blogpost_scenario_draft.md"
+        self.yt_draft_path = os.path.join(target_dir, "youtube_scenario_draft.md")
+        self.blog_draft_path = os.path.join(target_dir, "blogpost_scenario_draft.md")
+        self.ai_raw_output_path = os.path.join(target_dir, "ai_raw_output.md")
         
         # Google AI Studio 무료 API 키 로드 (환경변수만 사용)
         api_key = os.environ.get("GEMINI_API_KEY")
@@ -129,7 +130,7 @@ class TravelContentOrchestrator:
         # 파싱 로직 (간단히 파일 분할 저장 예시 - 실제 환경에선 마크다운 태그 기준으로 분할)
         print("[*] AI가 생성한 초안 내용을 파일로 이관 및 저장 중...")
         # (AI 응답을 나누어 youtube_scenario_draft.md, blogpost_scenario_draft.md에 저장하는 코드 블록)
-        with open("ai_raw_output.md", "w", encoding="utf-8") as f:
+        with open(self.ai_raw_output_path, "w", encoding="utf-8") as f:
             f.write(ai_response)
             
         # 3단계: 무인 Git 백업
