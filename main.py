@@ -4,6 +4,7 @@ import json
 import datetime
 import subprocess
 import shutil
+import re
 import cv2
 from pathlib import Path
 from google import genai
@@ -16,7 +17,6 @@ from google.genai import types
 def load_config(config_path: str = "config.json") -> dict:
     """config.json을 읽어 설정값을 반환합니다."""
     if not os.path.exists(config_path):
-        # 템플릿 자동 생성
         template = {
             "gemini_api_key": "여기에_실제_AIzaSy_API_키를_입력하세요",
             "gemini_model": "gemini-2.5-flash",
@@ -30,32 +30,27 @@ def load_config(config_path: str = "config.json") -> dict:
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(template, f, ensure_ascii=False, indent=2)
         print(f"[!] '{config_path}' 파일이 없어 템플릿을 생성했습니다.")
-        print(f"    → gemini_api_key, git_repo_url, git_pat 를 직접 수정한 뒤 다시 실행하세요.")
         sys.exit(0)
 
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
-    # 필수 항목 검증
     required_keys = ["gemini_api_key", "git_repo_url", "git_pat", "git_work_dir"]
     for key in required_keys:
         if key not in cfg or not cfg[key]:
             print(f"[오류] config.json에 '{key}' 값이 없습니다.")
             sys.exit(1)
 
-    # Gemini API 키 검증
     if "AIzaSy" not in cfg["gemini_api_key"] and cfg["gemini_api_key"].startswith("여기에"):
         print("[오류] config.json의 gemini_api_key를 실제 키로 교체해 주세요.")
         sys.exit(1)
 
-    # Git PAT 검증
     if cfg["git_pat"].startswith("ghp_여기에") or cfg["git_pat"].startswith("여기에"):
         print("[오류] config.json의 git_pat를 실제 GitHub PAT로 교체해 주세요.")
         sys.exit(1)
 
-    # Git 저장소 URL 검증
     if "github.com" not in cfg["git_repo_url"]:
-        print("[오류] config.json의 git_repo_url이 유효하지 않습니다. (GitHub URL 필요)")
+        print("[오류] config.json의 git_repo_url이 유효하지 않습니다.")
         sys.exit(1)
 
     return cfg
@@ -64,19 +59,15 @@ def load_config(config_path: str = "config.json") -> dict:
 def input_target_dir() -> str:
     """사용자로부터 타겟 폴더 경로를 입력받습니다."""
     while True:
-        target = input("\n📁 여행 미디어 폴더의 전체 경로를 입력하세요\n   (예: D:\\여행사진\\태백산 또는 /Users/name/Documents/travel): ").strip()
+        target = input("\n📁 여행 미디어 폴더의 전체 경로를 입력하세요\n   (예: D:\\여행사진\\태백산): ").strip()
+        target = target.strip('"').strip("'")
         
         if not target:
             print("   [경고] 경로를 입력해 주세요.")
             continue
-        
-        # 윈도우 경로의 따옴표 제거
-        target = target.strip('"').strip("'")
-        
         if not os.path.exists(target):
             print(f"   [경고] 해당 경로가 없습니다: {target}")
             continue
-        
         if not os.path.isdir(target):
             print(f"   [경고] 파일이 아닌 폴더 경로를 입력해 주세요.")
             continue
@@ -85,45 +76,133 @@ def input_target_dir() -> str:
 
 
 # ─────────────────────────────────────────────
-#  여행 콘텐츠 오케스트레이터 v2.0
+#  여행 콘텐츠 오케스트레이터 v3.0
 # ─────────────────────────────────────────────
 class TravelContentOrchestrator:
     def __init__(self, cfg: dict, target_dir: str):
         self.cfg = cfg
-        self.target_dir      = target_dir
-        self.projects_dir    = cfg.get("projects_dir", "./projects")
-        self.model_name      = cfg.get("gemini_model", "gemini-2.5-flash")
-        self.temperature     = cfg.get("temperature", 0.3)
+        self.target_dir = target_dir
+        self.projects_dir = cfg.get("projects_dir", "./projects")
+        self.model_name = cfg.get("gemini_model", "gemini-2.5-flash")
+        self.temperature = cfg.get("temperature", 0.3)
         
-        # Git 설정
-        self.git_repo_url    = cfg.get("git_repo_url")
-        self.git_pat         = cfg.get("git_pat")
-        self.git_work_dir    = cfg.get("git_work_dir", "./git_workspace")
+        self.git_repo_url = cfg.get("git_repo_url")
+        self.git_pat = cfg.get("git_pat")
+        self.git_work_dir = cfg.get("git_work_dir", "./git_workspace")
 
-        # 하위 폴더명 추출 (여행명)
         self.folder_name = os.path.basename(self.target_dir.rstrip(os.sep))
-        
-        # 여행 프로젝트 디렉토리 (여행별 독립)
         self.project_dir = os.path.join(self.projects_dir, self.folder_name)
         
-        # 여행별 파일 경로 정의
-        self.filelist_path      = os.path.join(self.project_dir, "filelist.md")
-        self.instruction_path   = os.path.join(self.project_dir, "project_instructions.md")
+        self.filelist_path = os.path.join(self.project_dir, "filelist.md")
+        self.instruction_path = os.path.join(self.project_dir, "project_instructions.md")
         self.iteration_log_path = os.path.join(self.project_dir, "iteration_log.md")
         
-        # 글로벌 Knowledge 파일 (git_workspace에서 관리)
-        self.knowledge_path     = os.path.join(self.git_work_dir, "knowledge.md")
+        self.knowledge_path = os.path.join(self.git_work_dir, "knowledge.md")
 
         self.client = genai.Client(api_key=cfg["gemini_api_key"])
 
-    # ── 프로젝트 디렉토리 초기화 ────────────────
-    def init_project_dir(self) -> bool:
-        """여행 프로젝트 디렉토리를 초기화합니다 (첫 시도만)."""
-        if os.path.exists(self.project_dir):
-            print(f"    → 기존 프로젝트 폴더 사용: {self.project_dir}")
+    # ── Git 저장소 초기화 & 동기화 ───────────────
+    def init_git_repo(self) -> bool:
+        """Git 저장소 초기화 및 동기화"""
+        print(f"\n[Git] 저장소 동기화 중...")
+        
+        # git_work_dir 유효성 확인
+        is_valid_git_repo = False
+        if os.path.exists(self.git_work_dir):
+            git_check = subprocess.run(
+                ["git", "-C", self.git_work_dir, "rev-parse", "--git-dir"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                encoding="utf-8"
+            )
+            is_valid_git_repo = (git_check.returncode == 0)
+        
+        # 유효하지 않으면 clone
+        if not is_valid_git_repo:
+            if os.path.exists(self.git_work_dir):
+                print(f"    → 손상된 Git 폴더 정리 중...")
+                shutil.rmtree(self.git_work_dir)
+            
+            print(f"    → 저장소 복제 중...")
+            auth_url = self.git_repo_url.replace("https://", f"https://{self.git_pat}@")
+            result = subprocess.run(
+                ["git", "clone", auth_url, self.git_work_dir],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                encoding="utf-8"
+            )
+            if result.returncode != 0:
+                print(f"[Git Clone 실패]")
+                print(f"  → URL: {self.git_repo_url}")
+                print(f"  → 오류: {result.stderr}")
+                return False
+            print(f"    → 저장소 복제 완료")
+            self._setup_gitignore()
+            self._init_knowledge()
+        else:
+            print(f"    → 저장소 업데이트 중...")
+            result = subprocess.run(
+                ["git", "-C", self.git_work_dir, "pull"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                encoding="utf-8"
+            )
+            if result.returncode != 0:
+                print(f"[Git Pull 실패] {result.stderr}")
+                return False
+            print(f"    → 저장소 업데이트 완료")
+        
+        return True
+
+    # ── Git에서 project_instructions.md pull ─────
+    def pull_instruction_from_git(self) -> bool:
+        """Git에서 project_instructions.md를 다운로드"""
+        print(f"\n[Git] project_instructions.md 동기화 중...")
+        
+        git_instruction_path = os.path.join(self.git_work_dir, "project_instructions.md")
+        
+        if not os.path.exists(git_instruction_path):
+            print(f"    → Git에 project_instructions.md가 없습니다. 로컬 버전을 사용합니다.")
             return True
         
-        print(f"    → 새 프로젝트 폴더 생성: {self.project_dir}")
+        # Git 파일을 프로젝트 폴더로 복사
+        os.makedirs(self.project_dir, exist_ok=True)
+        shutil.copy2(git_instruction_path, self.instruction_path)
+        print(f"    → '{self.instruction_path}' 업데이트됨")
+        
+        return True
+
+    # ── "Current feedback" 추출 ─────────────────
+    def extract_current_feedback(self) -> str:
+        """project_instructions.md에서 'Current feedback and request' 섹션만 추출"""
+        if not os.path.exists(self.instruction_path):
+            return ""
+        
+        with open(self.instruction_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        # "### Current feedback and request" ~ "### Previous - 1" 사이의 텍스트 추출
+        pattern = r"### Current feedback and request\n(.*?)\n### Previous"
+        match = re.search(pattern, content, re.DOTALL)
+        
+        if match:
+            feedback = match.group(1).strip()
+            if feedback and not feedback.startswith("(이"):
+                return feedback
+        
+        return ""
+
+    # ── 프로젝트 디렉토리 초기화 ────────────────
+    def init_project_dir(self) -> bool:
+        """여행 프로젝트 디렉토리를 초기화합니다."""
+        if os.path.exists(self.project_dir):
+            print(f"\n[0/4] 기존 프로젝트 폴더 사용: {self.project_dir}")
+            return True
+        
+        print(f"\n[0/4] 새 프로젝트 폴더 생성: {self.project_dir}")
         try:
             os.makedirs(self.project_dir, exist_ok=True)
             return True
@@ -142,7 +221,7 @@ class TravelContentOrchestrator:
     def get_video_duration(self, file_path: str) -> str:
         try:
             video = cv2.VideoCapture(file_path)
-            fps   = video.get(cv2.CAP_PROP_FPS)
+            fps = video.get(cv2.CAP_PROP_FPS)
             frames = video.get(cv2.CAP_PROP_FRAME_COUNT)
             video.release()
             if fps > 0:
@@ -156,7 +235,7 @@ class TravelContentOrchestrator:
     # ── 파일명에서 설명 추출 ─────────────────────
     @staticmethod
     def extract_description(filename: str) -> str:
-        """파일명의 확장자를 제거하고 언더스코어 기준 3번째 이후를 설명으로 사용."""
+        """파일명에서 설명 추출"""
         name = os.path.splitext(filename)[0]
         parts = name.split("_")
         if len(parts) > 2:
@@ -175,8 +254,7 @@ class TravelContentOrchestrator:
 
         all_files = sorted(
             f for f in os.listdir(self.target_dir)
-            if os.path.isfile(os.path.join(self.target_dir, f))
-            and not f.startswith(".")
+            if os.path.isfile(os.path.join(self.target_dir, f)) and not f.startswith(".")
         )
 
         media_files = [
@@ -188,7 +266,7 @@ class TravelContentOrchestrator:
             print("[경고] 인식 가능한 미디어 파일이 없습니다.")
             return False
 
-        md  = "# 📷 여행 미디어 마스터 타임라인\n\n"
+        md = "# 📷 여행 미디어 마스터 타임라인\n\n"
         md += f"> 스캔 경로: `{self.target_dir}`  \n"
         md += f"> 스캔 일시: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
         md += "| 순번 | 파일명 | 유형 | 재생시간 | 자동 추출 설명 |\n"
@@ -196,50 +274,62 @@ class TravelContentOrchestrator:
 
         for idx, filename in enumerate(media_files, 1):
             full_path = os.path.join(self.target_dir, filename)
-            ext       = os.path.splitext(filename)[1].lower()
-            f_type    = "🎬 영상" if ext in video_exts else "📸 사진"
-            duration  = self.get_video_duration(full_path) if ext in video_exts else "-"
-            desc      = self.extract_description(filename)
+            ext = os.path.splitext(filename)[1].lower()
+            f_type = "🎬 영상" if ext in video_exts else "📸 사진"
+            duration = self.get_video_duration(full_path) if ext in video_exts else "-"
+            desc = self.extract_description(filename)
             md += f"| {idx} | `{filename}` | {f_type} | {duration} | {desc} |\n"
 
         os.makedirs(self.project_dir, exist_ok=True)
         with open(self.filelist_path, "w", encoding="utf-8") as f:
             f.write(md)
 
-        print(f"    → {len(media_files)}개 파일 스캔 완료. '{self.filelist_path}' 저장됨.")
+        print(f"    → {len(media_files)}개 파일 스캔 완료.")
         return True
 
     # ── project_instructions.md 초기 템플릿 생성 ─
     def ensure_instruction_file(self):
+        """project_instructions.md 템플릿 생성"""
         if os.path.exists(self.instruction_path):
-            return  # 이미 있으면 건드리지 않음
+            return
 
-        template = f"""# 🗒️ 프로젝트 누적 지침 - {self.folder_name}
+        template = f"""# YouTube Blog Scene Creator - Project Instructions
 
-## 여행 기본 정보
-- 여행지: {self.folder_name}
-- 날짜: (입력해주세요)
-- 코스: (입력해주세요)
-- 동행: (입력해주세요)
-- 날씨: (입력해주세요)
+Project Overview  
+Travel content automation system for creating YouTube and blog scenes.
 
-## 유튜브 채널 정보
-- 채널 이름: (입력해주세요)
-- 채널 성격: (입력해주세요)
-- 영상 스타일: (입력해주세요)
-- 목표 영상 길이: (입력해주세요)
+---
 
-## 블로그 정보
-- 플랫폼: 네이버 블로그
-- 주요 타깃 키워드: (입력해주세요)
-- 원하는 글 분위기: (입력해주세요)
+## Development Guidelines for this iteration to enhance
 
-## 피드백 / 이전 회차 수정 사항
-- (AI 결과를 보고 마음에 안 드는 부분을 여기에 자유롭게 적어주세요)
+### Current feedback and request
+(이 섹션에 이번 회차의 새로운 요청/피드백을 입력하세요)
+
+---
+
+### Previous - 1 feedback and request
+(이전 1회차 요청이 자동으로 여기에 이동됩니다)
+
+---
+
+### Previous - 2 feedback and request
+(이전 2회차 요청이 자동으로 여기에 이동됩니다)
+
+---
+
+### Previous - 3 feedback and request
+(이전 3회차 요청이 자동으로 여기에 이동됩니다)
+
+---
+
+## Project Information
+
+- Travel: {self.folder_name}
+- Last Updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
 """
         with open(self.instruction_path, "w", encoding="utf-8") as f:
             f.write(template)
-        print(f"    → '{self.instruction_path}' 초기 템플릿 생성됨. 내용을 채운 뒤 재실행하세요.")
+        print(f"\n[2/4] '{self.instruction_path}' 초기 템플릿 생성됨.")
 
     # ── 반복 회차 카운터 ─────────────────────────
     def get_iteration_count(self) -> int:
@@ -257,18 +347,12 @@ class TravelContentOrchestrator:
             f.write(entry)
 
     # ── Gemini API 호출 ──────────────────────────
-    def call_gemini(self, iteration: int) -> str | None:
-        print(f"\n[3/4] Gemini AI 호출 중... (회차: {iteration}, 약 1~2분 소요)")
+    def call_gemini(self, iteration: int, current_feedback: str) -> str | None:
+        print(f"\n[3/4] Gemini AI 호출 중... (회차: {iteration})")
 
         with open(self.filelist_path, "r", encoding="utf-8") as f:
             filelist_content = f.read()
 
-        instruction_content = ""
-        if os.path.exists(self.instruction_path):
-            with open(self.instruction_path, "r", encoding="utf-8") as f:
-                instruction_content = f.read()
-
-        # Knowledge.md에서 누적된 방법론 읽기
         knowledge_content = ""
         if os.path.exists(self.knowledge_path):
             with open(self.knowledge_path, "r", encoding="utf-8") as f:
@@ -279,42 +363,39 @@ class TravelContentOrchestrator:
 사실에 기반하되 예능적 재미가 가득한 콘텐츠 초안을 작성해야 해.
 이번은 {iteration}회차 작업이야.
 
-[누적된 시나리오 제작 방법론]
-{knowledge_content if knowledge_content else "아직 누적된 방법이 없습니다. 기본 방식으로 진행해주세요."}
+[누적된 제작 방법론]
+{knowledge_content if knowledge_content else "아직 누적된 방법이 없습니다."}
 
-[프로젝트 지침]
-{instruction_content}
+[이번 회차 사용자 요청]
+{current_feedback if current_feedback else "특별한 요청이 없습니다. 기본 방식으로 진행해주세요."}
 
 [미디어 타임라인]
 {filelist_content}
 """
 
-        user_prompt = f"""
-위 타임라인과 지침을 완벽히 분석해서 아래 두 섹션으로 나누어 초안을 작성해줘.
-각 섹션은 반드시 구분선(===)과 섹션 헤더로 명확히 분리해줘.
+        user_prompt = """
+위 타임라인과 요청을 완벽히 분석해서 아래 두 섹션으로 나누어 초안을 작성해줘.
 
 ===========================================================
 ## [SECTION 1] 유튜브 시나리오 초안
 ===========================================================
 
-- 제목 후보 3개 (클릭률 최적화, A/B 테스트용)
-- 썸네일 컨셉 (대문 사진 선정 기준 + 흰 공백 레이아웃 배치 제안)
-- 3초 훅 (오프닝 대사/장면 — 시청자가 스크롤 멈추게 하는 임팩트)
-- 전체 타임라인 (시각/청각 분리 레이아웃: 왼쪽=영상 설명, 오른쪽=내레이션/자막)
-- 하이라이트 장면 TOP3 선정 이유
-- 엔딩 CTA (구독/좋아요 멘트)
+- 제목 후보 3개
+- 썸네일 컨셉
+- 3초 훅
+- 전체 타임라인 (시각/청각 분리)
+- 하이라이트 장면 TOP3
+- 엔딩 CTA
 
 ===========================================================
 ## [SECTION 2] 네이버 블로그 초안
 ===========================================================
 
-- 제목 (상위 노출 키워드 포함, 30자 이내)
-- 대표 키워드 5개 + 롱테일 키워드 5개
-- 본문 (최소 1500자, 소제목 포함, 정보+감성 혼합)
-- 대문 사진 배치 가이드 (몇 번째 사진 권장, 이유)
-- 태그 추천 10개
-
-이번 {iteration}회차에서 이전과 달라진 점이 있다면 [변경사항] 섹션에 명시해줘.
+- 제목 (상위 노출 키워드 포함)
+- 대표 키워드 5개 + 롱테일 5개
+- 본문 (1500자+)
+- 대문 사진 배치 가이드
+- 태그 10개
 """
 
         try:
@@ -328,15 +409,15 @@ class TravelContentOrchestrator:
             )
             return response.text
         except Exception as e:
-            print(f"[API 오류] Gemini 호출 실패: {e}")
+            print(f"[API 오류] {e}")
             return None
 
     # ── 결과 저장 ────────────────────────────────
-    def save_output(self, content: str, iteration: int):
+    def save_output(self, content: str, iteration: int) -> str:
+        """AI 결과를 저장"""
         output_path = self.get_output_path()
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         
-        # filelist.md 내용 읽기
         filelist_content = ""
         if os.path.exists(self.filelist_path):
             with open(self.filelist_path, "r", encoding="utf-8") as f:
@@ -347,7 +428,6 @@ class TravelContentOrchestrator:
 > 생성 일시: {timestamp}  
 > 모델: {self.model_name}  
 > 여행: {self.folder_name}
-> 반복 개선: project_instructions.md 를 수정 후 재실행하면 다음 회차가 생성됩니다.
 
 ---
 
@@ -362,181 +442,207 @@ class TravelContentOrchestrator:
 """
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(header + content)
-        print(f"    → '{output_path}' 저장 완료 (filelist 포함).")
+        print(f"\n[4/4] 결과 저장 완료: {os.path.basename(output_path)}")
         return output_path
 
-    # ── Git에 결과 파일 & Knowledge Push ─────────
-    def push_to_git(self, output_path: str) -> bool:
-        """결과 파일과 knowledge.md를 Git 저장소에 commit & push합니다."""
-        print(f"\n[5/4] Git에 결과 업로드 중...")
+    # ── Knowledge.md 자동 업데이트 (AI 협업) ────
+    def update_knowledge_with_ai(self, iteration: int, ai_response: str) -> bool:
+        """AI와 협업하여 knowledge.md 업데이트"""
+        print(f"\n[5/4] Knowledge.md 업데이트 중...")
+        
+        prompt = f"""
+다음은 {iteration}회차 {self.folder_name} 여행의 AI 생성 콘텐츠입니다:
+
+{ai_response}
+
+위 결과에서 얻을 수 있는 통찰력, 패턴, 베스트 프랙티스를 정리하여 
+다음과 같은 형식으로 knowledge.md 업데이트 내용을 생성해주세요:
+
+### {self.folder_name} ({iteration}회차 발견사항)
+
+**유튜브 시나리오:**
+- (발견사항 1)
+- (발견사항 2)
+
+**블로그 전략:**
+- (발견사항 1)
+- (발견사항 2)
+
+**특수 노하우:**
+- (발견사항)
+
+짧고 명확하게 작성해주세요.
+"""
         
         try:
-            # git_work_dir이 유효한 git repo인지 확인
-            is_valid_git_repo = False
-            if os.path.exists(self.git_work_dir):
-                git_check = subprocess.run(
-                    ["git", "-C", self.git_work_dir, "rev-parse", "--git-dir"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    encoding="utf-8"
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.3
                 )
-                is_valid_git_repo = (git_check.returncode == 0)
-            
-            # git repo가 없거나 유효하지 않으면 clone
-            if not is_valid_git_repo:
-                # 기존 폴더가 있으면 삭제 (손상된 상태)
-                if os.path.exists(self.git_work_dir):
-                    print(f"    → 손상된 Git 폴더 정리 중...")
-                    shutil.rmtree(self.git_work_dir)
-                
-                print(f"    → Git 저장소 복제 중: {self.git_repo_url}")
-                auth_url = self.git_repo_url.replace(
-                    "https://", 
-                    f"https://{self.git_pat}@"
-                )
-                result = subprocess.run(
-                    ["git", "clone", auth_url, self.git_work_dir],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    encoding="utf-8"
-                )
-                if result.returncode != 0:
-                    print(f"[Git Clone 실패]")
-                    print(f"  → 저장소 URL: {self.git_repo_url}")
-                    print(f"  → 오류: {result.stderr}")
-                    print(f"  → 확인사항:")
-                    print(f"     1. GitHub PAT가 유효한가?")
-                    print(f"     2. 저장소 URL이 올바른가?")
-                    print(f"     3. GitHub에서 저장소가 공개되어 있는가?")
-                    return False
-                print(f"    → 저장소 복제 완료")
-                
-                # .gitignore 생성
-                self._setup_gitignore()
-                
-                # knowledge.md 템플릿 생성
-                self._init_knowledge()
-            else:
-                # 기존 repo pull
-                print(f"    → Git 저장소 업데이트 중")
-                result = subprocess.run(
-                    ["git", "-C", self.git_work_dir, "pull"],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    encoding="utf-8"
-                )
-                if result.returncode != 0:
-                    print(f"[Git Pull 실패] {result.stderr}")
-                    return False
-                print(f"    → 저장소 업데이트 완료")
-
-            # 결과 파일을 git_work_dir로 복사
-            dest_file = os.path.join(self.git_work_dir, os.path.basename(output_path))
-            shutil.copy2(output_path, dest_file)
-            print(f"    → 파일 복사: {os.path.basename(output_path)}")
-
-            files_to_push = [os.path.basename(output_path)]
-
-            # 사용자에게 main.py 포함 여부 질문
-            while True:
-                include_main = input(f"\n    main.py도 함께 push하시겠습니까? (y/n): ").strip().lower()
-                if include_main in ['y', 'n']:
-                    break
-                print("    [경고] y 또는 n을 입력해주세요.")
-
-            if include_main == 'y':
-                main_py_path = "main.py"
-                if os.path.exists(main_py_path):
-                    dest_main = os.path.join(self.git_work_dir, "main.py")
-                    shutil.copy2(main_py_path, dest_main)
-                    files_to_push.append("main.py")
-                    print(f"    → main.py 추가됨")
-
-            # Knowledge.md가 있으면 포함
-            if os.path.exists(self.knowledge_path):
-                files_to_push.append("knowledge.md")
-                print(f"    → knowledge.md 포함됨")
-
-            # Git add (명시적으로 지정된 파일만)
-            for file in files_to_push:
-                result = subprocess.run(
-                    ["git", "-C", self.git_work_dir, "add", file],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    encoding="utf-8"
-                )
-                if result.returncode != 0:
-                    print(f"[Git Add 실패] {result.stderr}")
-                    return False
-
-            # config.json, projects 폴더가 실수로 추가되었는지 확인 후 제거
-            result = subprocess.run(
-                ["git", "-C", self.git_work_dir, "status", "--porcelain"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                encoding="utf-8"
             )
-            for exclude_file in ["config.json", "projects"]:
-                if exclude_file in result.stdout:
-                    print(f"    [⚠️ 경고] {exclude_file}이 git에 추가되려고 합니다. 제외 중...")
-                    subprocess.run(
-                        ["git", "-C", self.git_work_dir, "reset", exclude_file],
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                        encoding="utf-8"
-                    )
-
-            # Git commit
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-            files_desc = f"{self.folder_name} - {', '.join(files_to_push)}"
-            commit_msg = f"[{self.folder_name}] {timestamp} - {files_desc}"
             
-            result = subprocess.run(
-                ["git", "-C", self.git_work_dir, "commit", "-m", commit_msg],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                encoding="utf-8"
-            )
-            if result.returncode != 0:
-                if "nothing to commit" not in result.stdout.lower():
-                    print(f"[Git Commit 실패] {result.stderr}")
-                    return False
-                print(f"    → 커밋할 변경사항 없음")
-            else:
-                print(f"    → Commit 완료: {commit_msg}")
-
-            # Git push
-            result = subprocess.run(
-                ["git", "-C", self.git_work_dir, "push"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                encoding="utf-8"
-            )
-            if result.returncode != 0:
-                print(f"[Git Push 실패] {result.stderr}")
-                return False
-            print(f"    → Push 완료 ({', '.join(files_to_push)})")
+            new_content = response.text
             
+            # knowledge.md에 추가
+            with open(self.knowledge_path, "a", encoding="utf-8") as f:
+                f.write(f"\n{new_content}\n")
+            
+            print(f"    → knowledge.md 업데이트 완료")
             return True
-
-        except subprocess.TimeoutExpired:
-            print("[오류] Git 작업 시간 초과")
-            return False
         except Exception as e:
-            print(f"[Git 오류] {str(e)}")
+            print(f"    [경고] knowledge.md 업데이트 실패: {e}")
+            return True  # 계속 진행
+
+    # ── project_instructions.md 정리 (피드백 로테이션) ─
+    def rotate_feedback_in_instruction(self) -> bool:
+        """Current feedback를 Previous 1/2/3로 로테이션"""
+        print(f"\n[6/4] project_instructions.md 정리 중...")
+        
+        if not os.path.exists(self.instruction_path):
+            print(f"    → 정리할 피드백이 없습니다.")
+            return True
+        
+        with open(self.instruction_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        # Current feedback 추출
+        pattern = r"### Current feedback and request\n(.*?)\n### Previous"
+        match = re.search(pattern, content, re.DOTALL)
+        current_feedback = match.group(1).strip() if match else ""
+        
+        # 비어있으면 정리 불필요
+        if not current_feedback or current_feedback.startswith("(이"):
+            print(f"    → Current feedback이 비어있습니다. 정리 불필요.")
+            return True
+        
+        # Previous 3 → 삭제, Previous 2 → Previous 3, Previous 1 → Previous 2, Current → Previous 1
+        new_content = content
+        
+        # Previous 3 제거
+        new_content = re.sub(
+            r"\n### Previous - 3 feedback and request\n.*?(?=### Previous - 2|$)",
+            "",
+            new_content,
+            flags=re.DOTALL
+        )
+        
+        # Previous 2 → Previous 3
+        new_content = new_content.replace(
+            "### Previous - 2 feedback and request",
+            "### Previous - 3 feedback and request"
+        )
+        
+        # Previous 1 → Previous 2
+        new_content = new_content.replace(
+            "### Previous - 1 feedback and request",
+            "### Previous - 2 feedback and request"
+        )
+        
+        # Current → Previous 1
+        new_content = re.sub(
+            r"### Current feedback and request\n.*?\n### Previous",
+            f"### Previous - 1 feedback and request\n{current_feedback}\n\n### Previous",
+            new_content,
+            flags=re.DOTALL
+        )
+        
+        # Current 초기화
+        new_content = re.sub(
+            r"### Current feedback and request\n.*?\n### Previous",
+            "### Current feedback and request\n(이 섹션에 이번 회차의 새로운 요청/피드백을 입력하세요)\n\n### Previous",
+            new_content,
+            flags=re.DOTALL
+        )
+        
+        with open(self.instruction_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        
+        print(f"    → 피드백 로테이션 완료 (Current → Previous 1/2/3)")
+        return True
+
+    # ── Git Push ─────────────────────────────────
+    def push_to_git(self, output_path: str) -> bool:
+        """Knowledge.md와 project_instructions.md를 git에 push"""
+        print(f"\n[Git] 최종 업로드 중...")
+        
+        files_to_push = [os.path.basename(output_path)]
+        
+        # 결과 파일을 git_workspace로 복사
+        dest_file = os.path.join(self.git_work_dir, os.path.basename(output_path))
+        shutil.copy2(output_path, dest_file)
+        print(f"    → 파일 복사: {os.path.basename(output_path)}")
+        
+        # 정리된 project_instructions.md를 git_workspace로 복사
+        git_instruction_path = os.path.join(self.git_work_dir, "project_instructions.md")
+        shutil.copy2(self.instruction_path, git_instruction_path)
+        files_to_push.append("project_instructions.md")
+        print(f"    → 파일 복사: project_instructions.md")
+        
+        # knowledge.md 복사
+        files_to_push.append("knowledge.md")
+        print(f"    → 파일 포함: knowledge.md")
+        
+        # main.py 포함 여부 질문
+        while True:
+            include_main = input(f"\n    main.py도 함께 push하시겠습니까? (y/n): ").strip().lower()
+            if include_main in ['y', 'n']:
+                break
+        
+        if include_main == 'y':
+            if os.path.exists("main.py"):
+                dest_main = os.path.join(self.git_work_dir, "main.py")
+                shutil.copy2("main.py", dest_main)
+                files_to_push.append("main.py")
+                print(f"    → 파일 추가: main.py")
+        
+        # Git add
+        for file in files_to_push:
+            result = subprocess.run(
+                ["git", "-C", self.git_work_dir, "add", file],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                encoding="utf-8"
+            )
+            if result.returncode != 0:
+                print(f"[Git Add 실패] {result.stderr}")
+                return False
+        
+        # Git commit
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        commit_msg = f"[{self.folder_name}] {timestamp} - {', '.join(files_to_push)}"
+        result = subprocess.run(
+            ["git", "-C", self.git_work_dir, "commit", "-m", commit_msg],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            encoding="utf-8"
+        )
+        if result.returncode != 0 and "nothing to commit" not in result.stdout.lower():
+            print(f"[Git Commit 실패] {result.stderr}")
             return False
+        
+        print(f"    → Commit: {commit_msg}")
+        
+        # Git push
+        result = subprocess.run(
+            ["git", "-C", self.git_work_dir, "push"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            encoding="utf-8"
+        )
+        if result.returncode != 0:
+            print(f"[Git Push 실패] {result.stderr}")
+            return False
+        
+        print(f"    → Push 완료 ✅")
+        return True
 
     # ── .gitignore 설정 ────────────────────────────
     def _setup_gitignore(self):
-        """git_work_dir에 .gitignore를 생성하여 민감한 파일 제외"""
         gitignore_path = os.path.join(self.git_work_dir, ".gitignore")
         
         if os.path.exists(gitignore_path):
@@ -544,16 +650,16 @@ class TravelContentOrchestrator:
                 content = f.read()
             if "config.json" not in content:
                 with open(gitignore_path, "a", encoding="utf-8") as f:
-                    f.write("\n# 민감한 설정 파일\nconfig.json\nprojects/\n.env\n.env.local\n")
+                    f.write("\nconfig.json\nprojects/\n")
         else:
             with open(gitignore_path, "w", encoding="utf-8") as f:
-                f.write("""# 민감한 설정 파일 (API 키, PAT 등)
+                f.write("""# 민감한 설정 파일
 config.json
 projects/
 .env
 .env.local
 
-# IDE & 시스템 파일
+# IDE & 시스템
 .vscode/
 .idea/
 __pycache__/
@@ -561,124 +667,100 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# 로컬 작업 폴더
+# 로컬 작업
 git_workspace/
 """)
-        
-        print(f"    → .gitignore 설정 완료 (config.json, projects/ 제외)")
 
     # ── Knowledge.md 초기화 ────────────────────────
     def _init_knowledge(self):
-        """knowledge.md 템플릿 생성 (첫 clone 시 한번만)"""
         if os.path.exists(self.knowledge_path):
             return
         
         with open(self.knowledge_path, "w", encoding="utf-8") as f:
-            f.write("""# 📚 누적된 콘텐츠 제작 방법론
+            f.write("""# 📚 YouTube Blog Scene Creator - Knowledge Base
 
-> 여러 여행을 통해 축적된 시나리오 제작 방법과 베스트 프랙티스를 기록합니다.
-> 각 회차마다 새로운 발견이나 개선사항을 이곳에 추가하세요.
-
----
-
-## 🎬 유튜브 시나리오 제작 팁
-
-### 3초 훅 작성
-- (경험을 통해 추가해주세요)
-
-### 시각/청각 분리 레이아웃
-- (경험을 통해 추가해주세요)
-
-### 썸네일 컨셉
-- (경험을 통해 추가해주세요)
+> 이 파일은 모든 여행을 통해 축적된 제작 방법론과 베스트 프랙티스를 기록합니다.
+> 사용자는 직접 수정하지 않으며, AI와 협업으로 자동 업데이트됩니다.
 
 ---
 
-## 📝 네이버 블로그 제작 팁
+## 축적된 인사이트
 
-### 상위 노출 키워드 선정
-- (경험을 통해 추가해주세요)
-
-### 본문 구성 방법
-- (경험을 통해 추가해주세요)
-
-### 대문 사진 선정
-- (경험을 통해 추가해주세요)
-
----
-
-## 🌍 여행별 특수 사항
-
-### 산/협곡/높은 곳
-- (경험을 통해 추가해주세요)
-
-### 해변/물가
-- (경험을 통해 추가해주세요)
-
-### 도시/건축
-- (경험을 통해 추가해주세요)
-
----
-
-## 📊 유효하지 않은 방법 (피해야 할 것)
-
-- (경험을 통해 추가해주세요)
-
----
+(여행별 발견사항이 자동으로 누적됩니다)
 
 마지막 업데이트: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
 """)
-        print(f"    → knowledge.md 템플릿 생성됨")
 
     # ── 전체 파이프라인 ──────────────────────────
     def run(self):
-        print("=" * 60)
-        print("  🏔️  여행 콘텐츠 AI 오케스트레이터 v2.0")
-        print("  여행별 독립 관리 | 누적 방법론 | Charset 호환성")
-        print("=" * 60)
+        print("=" * 70)
+        print("  🏔️  여행 콘텐츠 AI 오케스트레이터 v3.0")
+        print("  Git 동기화 | 자동 Knowledge 업데이트 | 피드백 로테이션")
+        print("=" * 70)
 
-        # 1. 프로젝트 디렉토리 초기화 (여행별 독립)
-        print("\n[0/4] 프로젝트 디렉토리 초기화 중...")
+        # 1. Git 동기화
+        if not self.init_git_repo():
+            return
+        
+        # 2. 프로젝트 디렉토리 초기화
         if not self.init_project_dir():
             return
-
-        # 2. 미디어 스캔
+        
+        # 3. 미디어 스캔
         if not self.generate_filelist():
             return
-
-        # 3. 지침 파일 보장
-        print("\n[2/4] 프로젝트 지침 파일 확인 중...")
+        
+        # 4. 지침 파일 보장
+        print(f"\n[2/4] 프로젝트 지침 파일 확인 중...")
+        
+        # 4-1. Git에서 project_instructions.md pull
+        if not self.pull_instruction_from_git():
+            return
+        
+        # 4-2. 로컬 버전이 없으면 템플릿 생성
         self.ensure_instruction_file()
-
-        # 4. 반복 회차 확인
+        
+        # 5. 회차 확인
         iteration = self.get_iteration_count()
         print(f"    → 현재 {iteration}회차 실행")
-
-        # 5. AI 호출
-        ai_response = self.call_gemini(iteration)
+        
+        # 6. Current feedback 추출
+        current_feedback = self.extract_current_feedback()
+        if current_feedback:
+            print(f"    → Current feedback 감지됨 (길이: {len(current_feedback)} 자)")
+        else:
+            print(f"    → Current feedback이 비어있습니다.")
+        
+        # 7. AI 호출
+        ai_response = self.call_gemini(iteration, current_feedback)
         if not ai_response:
             return
-
-        # 6. 저장
-        print(f"\n[4/4] 결과 저장 중...")
+        
+        # 8. 결과 저장
         output_path = self.save_output(ai_response, iteration)
         self.log_iteration(iteration, output_path)
-
-        # 7. Git Push
+        
+        # 9. Knowledge.md 업데이트 (AI 협업)
+        self.update_knowledge_with_ai(iteration, ai_response)
+        
+        # 10. project_instructions.md 정리
+        self.rotate_feedback_in_instruction()
+        
+        # 11. Git Push
         if not self.push_to_git(output_path):
-            print("\n" + "=" * 60)
+            print("\n" + "=" * 70)
             print(f"  ❌ Git 업로드 실패!")
-            print("=" * 60)
+            print("=" * 70)
             sys.exit(1)
-
-        print("\n" + "=" * 60)
+        
+        print("\n" + "=" * 70)
         print(f"  ✅ {iteration}회차 완료!")
-        print(f"  📁 프로젝트 폴더: {self.project_dir}")
-        print(f"  📄 결과 파일: {output_path}")
-        print(f"  📋 지침 파일: {self.instruction_path}")
-        print(f"  📚 방법론: {self.knowledge_path} (Git에서 관리)")
-        print(f"  🔁 개선: project_instructions.md 피드백 추가 → 재실행")
-        print("=" * 60)
+        print(f"  📁 프로젝트: {self.project_dir}")
+        print(f"  📄 결과: {os.path.basename(output_path)}")
+        print(f"  📚 Knowledge: 자동 업데이트됨")
+        print(f"  🔄 피드백: 로테이션 완료 (Current → Previous 1/2/3)")
+        print(f"  🚀 다음 단계: Git에서 project_instructions.md 수정 → main.py 실행")
+        print("=" * 70)
 
 
 # ─────────────────────────────────────────────
