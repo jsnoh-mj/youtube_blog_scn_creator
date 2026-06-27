@@ -76,7 +76,7 @@ def input_target_dir() -> str:
 
 
 # ─────────────────────────────────────────────
-#  여행 콘텐츠 오케스트레이터 v3.0
+#  여행 콘텐츠 오케스트레이터 v4.0
 # ─────────────────────────────────────────────
 class TravelContentOrchestrator:
     def __init__(self, cfg: dict, target_dir: str):
@@ -93,10 +93,17 @@ class TravelContentOrchestrator:
         self.folder_name = os.path.basename(self.target_dir.rstrip(os.sep))
         self.project_dir = os.path.join(self.projects_dir, self.folder_name)
         
+        # App 전체 단위 파일 (local)
+        self.instructions_path = "instructions.md"
+        
+        # Git 저장소의 instructions.md
+        self.git_instructions_path = os.path.join(self.git_work_dir, "instructions.md")
+        
+        # 여행별 파일
         self.filelist_path = os.path.join(self.project_dir, "filelist.md")
-        self.instruction_path = os.path.join(self.project_dir, "project_instructions.md")
         self.iteration_log_path = os.path.join(self.project_dir, "iteration_log.md")
         
+        # 글로벌 Knowledge
         self.knowledge_path = os.path.join(self.git_work_dir, "knowledge.md")
 
         self.client = genai.Client(api_key=cfg["gemini_api_key"])
@@ -106,7 +113,6 @@ class TravelContentOrchestrator:
         """Git 저장소 초기화 및 동기화"""
         print(f"\n[Git] 저장소 동기화 중...")
         
-        # git_work_dir 유효성 확인
         is_valid_git_repo = False
         if os.path.exists(self.git_work_dir):
             git_check = subprocess.run(
@@ -118,7 +124,6 @@ class TravelContentOrchestrator:
             )
             is_valid_git_repo = (git_check.returncode == 0)
         
-        # 유효하지 않으면 clone
         if not is_valid_git_repo:
             if os.path.exists(self.git_work_dir):
                 print(f"    → 손상된 Git 폴더 정리 중...")
@@ -157,40 +162,37 @@ class TravelContentOrchestrator:
         
         return True
 
-    # ── Git에서 project_instructions.md pull ─────
-    def pull_instruction_from_git(self) -> bool:
-        """Git에서 project_instructions.md를 다운로드"""
-        print(f"\n[Git] project_instructions.md 동기화 중...")
+    # ── Git에서 instructions.md pull ──────────
+    def pull_instructions_from_git(self) -> bool:
+        """Git에서 instructions.md를 다운로드 (App 전체 단위)"""
+        print(f"\n[Git] instructions.md 동기화 중...")
         
-        git_instruction_path = os.path.join(self.git_work_dir, "project_instructions.md")
-        
-        if not os.path.exists(git_instruction_path):
-            print(f"    → Git에 project_instructions.md가 없습니다. 로컬 버전을 사용합니다.")
+        if not os.path.exists(self.git_instructions_path):
+            print(f"    → Git에 instructions.md가 없습니다.")
             return True
         
-        # Git 파일을 프로젝트 폴더로 복사
-        os.makedirs(self.project_dir, exist_ok=True)
-        shutil.copy2(git_instruction_path, self.instruction_path)
-        print(f"    → '{self.instruction_path}' 업데이트됨")
+        # Git 파일을 로컬로 복사
+        shutil.copy2(self.git_instructions_path, self.instructions_path)
+        print(f"    → 'instructions.md' 업데이트됨")
         
         return True
 
     # ── "Current feedback" 추출 ─────────────────
     def extract_current_feedback(self) -> str:
-        """project_instructions.md에서 'Current feedback and request' 섹션만 추출"""
-        if not os.path.exists(self.instruction_path):
+        """instructions.md에서 'Current feedback' 섹션만 추출"""
+        if not os.path.exists(self.instructions_path):
             return ""
         
-        with open(self.instruction_path, "r", encoding="utf-8") as f:
+        with open(self.instructions_path, "r", encoding="utf-8") as f:
             content = f.read()
         
-        # "### Current feedback and request" ~ "### Previous - 1" 사이의 텍스트 추출
-        pattern = r"### Current feedback and request\n(.*?)\n### Previous"
+        # "## Current feedback" ~ "## Previous" 사이 추출
+        pattern = r"## Current feedback.*?\n(.*?)\n## Previous"
         match = re.search(pattern, content, re.DOTALL)
         
         if match:
             feedback = match.group(1).strip()
-            if feedback and not feedback.startswith("(이"):
+            if feedback and not feedback.startswith("("):
                 return feedback
         
         return ""
@@ -286,50 +288,6 @@ class TravelContentOrchestrator:
 
         print(f"    → {len(media_files)}개 파일 스캔 완료.")
         return True
-
-    # ── project_instructions.md 초기 템플릿 생성 ─
-    def ensure_instruction_file(self):
-        """project_instructions.md 템플릿 생성"""
-        if os.path.exists(self.instruction_path):
-            return
-
-        template = f"""# YouTube Blog Scene Creator - Project Instructions
-
-Project Overview  
-Travel content automation system for creating YouTube and blog scenes.
-
----
-
-## Development Guidelines for this iteration to enhance
-
-### Current feedback and request
-(이 섹션에 이번 회차의 새로운 요청/피드백을 입력하세요)
-
----
-
-### Previous - 1 feedback and request
-(이전 1회차 요청이 자동으로 여기에 이동됩니다)
-
----
-
-### Previous - 2 feedback and request
-(이전 2회차 요청이 자동으로 여기에 이동됩니다)
-
----
-
-### Previous - 3 feedback and request
-(이전 3회차 요청이 자동으로 여기에 이동됩니다)
-
----
-
-## Project Information
-
-- Travel: {self.folder_name}
-- Last Updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
-"""
-        with open(self.instruction_path, "w", encoding="utf-8") as f:
-            f.write(template)
-        print(f"\n[2/4] '{self.instruction_path}' 초기 템플릿 생성됨.")
 
     # ── 반복 회차 카운터 ─────────────────────────
     def get_iteration_count(self) -> int:
@@ -458,20 +416,19 @@ Travel content automation system for creating YouTube and blog scenes.
 위 결과에서 얻을 수 있는 통찰력, 패턴, 베스트 프랙티스를 정리하여 
 다음과 같은 형식으로 knowledge.md 업데이트 내용을 생성해주세요:
 
-### {self.folder_name} ({iteration}회차 발견사항)
+### {self.folder_name} ({iteration}회차)
 
 **유튜브 시나리오:**
 - (발견사항 1)
 - (발견사항 2)
 
 **블로그 전략:**
-- (발견사항 1)
-- (발견사항 2)
+- (발견사항)
 
 **특수 노하우:**
 - (발견사항)
 
-짧고 명확하게 작성해주세요.
+짧고 명확하게 작성해주세요. (최대 10줄)
 """
         
         try:
@@ -485,7 +442,6 @@ Travel content automation system for creating YouTube and blog scenes.
             
             new_content = response.text
             
-            # knowledge.md에 추가
             with open(self.knowledge_path, "a", encoding="utf-8") as f:
                 f.write(f"\n{new_content}\n")
             
@@ -493,36 +449,30 @@ Travel content automation system for creating YouTube and blog scenes.
             return True
         except Exception as e:
             print(f"    [경고] knowledge.md 업데이트 실패: {e}")
-            return True  # 계속 진행
+            return True
 
-    # ── project_instructions.md 정리 (피드백 로테이션) ─
-    def rotate_feedback_in_instruction(self) -> bool:
-        """Current feedback를 Previous 1/2/3로 로테이션"""
-        print(f"\n[6/4] project_instructions.md 정리 중...")
+    # ── instructions.md 정리 (피드백 로테이션) ──
+    def rotate_feedback_in_instructions(self, had_feedback: bool) -> bool:
+        """Current feedback를 Previous로 로테이션 (비어있으면 스킵)"""
         
-        if not os.path.exists(self.instruction_path):
-            print(f"    → 정리할 피드백이 없습니다.")
+        # Current feedback이 비어있었으면 정리 불필요
+        if not had_feedback:
+            print(f"\n[6/4] Current feedback이 비어있습니다. 정리 스킵.")
             return True
         
-        with open(self.instruction_path, "r", encoding="utf-8") as f:
+        print(f"\n[6/4] instructions.md 정리 중...")
+        
+        if not os.path.exists(self.instructions_path):
+            return True
+        
+        with open(self.instructions_path, "r", encoding="utf-8") as f:
             content = f.read()
         
-        # Current feedback 추출
-        pattern = r"### Current feedback and request\n(.*?)\n### Previous"
-        match = re.search(pattern, content, re.DOTALL)
-        current_feedback = match.group(1).strip() if match else ""
-        
-        # 비어있으면 정리 불필요
-        if not current_feedback or current_feedback.startswith("(이"):
-            print(f"    → Current feedback이 비어있습니다. 정리 불필요.")
-            return True
-        
-        # Previous 3 → 삭제, Previous 2 → Previous 3, Previous 1 → Previous 2, Current → Previous 1
         new_content = content
         
         # Previous 3 제거
         new_content = re.sub(
-            r"\n### Previous - 3 feedback and request\n.*?(?=### Previous - 2|$)",
+            r"\n## Previous - 3 feedback.*?\n(?=## Previous|$)",
             "",
             new_content,
             flags=re.DOTALL
@@ -530,41 +480,41 @@ Travel content automation system for creating YouTube and blog scenes.
         
         # Previous 2 → Previous 3
         new_content = new_content.replace(
-            "### Previous - 2 feedback and request",
-            "### Previous - 3 feedback and request"
+            "## Previous - 2 feedback",
+            "## Previous - 3 feedback"
         )
         
         # Previous 1 → Previous 2
         new_content = new_content.replace(
-            "### Previous - 1 feedback and request",
-            "### Previous - 2 feedback and request"
+            "## Previous - 1 feedback",
+            "## Previous - 2 feedback"
         )
         
         # Current → Previous 1
-        new_content = re.sub(
-            r"### Current feedback and request\n.*?\n### Previous",
-            f"### Previous - 1 feedback and request\n{current_feedback}\n\n### Previous",
-            new_content,
-            flags=re.DOTALL
-        )
+        pattern = r"(## Current feedback.*?\n)(.*?)(\n## Previous)"
+        def replace_current(match):
+            current_content = match.group(2)
+            return f"{match.group(1)}{current_content}\n\n## Previous - 1 feedback and request\n{current_content}\n## Previous"
+        
+        new_content = re.sub(pattern, replace_current, new_content, flags=re.DOTALL)
         
         # Current 초기화
         new_content = re.sub(
-            r"### Current feedback and request\n.*?\n### Previous",
-            "### Current feedback and request\n(이 섹션에 이번 회차의 새로운 요청/피드백을 입력하세요)\n\n### Previous",
+            r"## Current feedback.*?\n.*?\n(?=## Previous)",
+            "## Current feedback and request\n(이 섹션에 새로운 요청을 입력하세요)\n\n## Previous",
             new_content,
             flags=re.DOTALL
         )
         
-        with open(self.instruction_path, "w", encoding="utf-8") as f:
+        with open(self.instructions_path, "w", encoding="utf-8") as f:
             f.write(new_content)
         
         print(f"    → 피드백 로테이션 완료 (Current → Previous 1/2/3)")
         return True
 
     # ── Git Push ─────────────────────────────────
-    def push_to_git(self, output_path: str) -> bool:
-        """Knowledge.md와 project_instructions.md를 git에 push"""
+    def push_to_git(self, output_path: str, had_feedback: bool) -> bool:
+        """Knowledge.md와 instructions.md를 git에 push"""
         print(f"\n[Git] 최종 업로드 중...")
         
         files_to_push = [os.path.basename(output_path)]
@@ -574,11 +524,12 @@ Travel content automation system for creating YouTube and blog scenes.
         shutil.copy2(output_path, dest_file)
         print(f"    → 파일 복사: {os.path.basename(output_path)}")
         
-        # 정리된 project_instructions.md를 git_workspace로 복사
-        git_instruction_path = os.path.join(self.git_work_dir, "project_instructions.md")
-        shutil.copy2(self.instruction_path, git_instruction_path)
-        files_to_push.append("project_instructions.md")
-        print(f"    → 파일 복사: project_instructions.md")
+        # instructions.md 복사 (feedback이 있었을 때만)
+        if had_feedback:
+            git_inst_path = os.path.join(self.git_work_dir, "instructions.md")
+            shutil.copy2(self.instructions_path, git_inst_path)
+            files_to_push.append("instructions.md")
+            print(f"    → 파일 복사: instructions.md")
         
         # knowledge.md 복사
         files_to_push.append("knowledge.md")
@@ -679,7 +630,7 @@ git_workspace/
         with open(self.knowledge_path, "w", encoding="utf-8") as f:
             f.write("""# 📚 YouTube Blog Scene Creator - Knowledge Base
 
-> 이 파일은 모든 여행을 통해 축적된 제작 방법론과 베스트 프랙티스를 기록합니다.
+> 이 파일은 모든 여행을 통해 축적된 제작 방법론을 기록합니다.
 > 사용자는 직접 수정하지 않으며, AI와 협업으로 자동 업데이트됩니다.
 
 ---
@@ -694,8 +645,8 @@ git_workspace/
     # ── 전체 파이프라인 ──────────────────────────
     def run(self):
         print("=" * 70)
-        print("  🏔️  여행 콘텐츠 AI 오케스트레이터 v3.0")
-        print("  Git 동기화 | 자동 Knowledge 업데이트 | 피드백 로테이션")
+        print("  🏔️  YouTube Blog Scene Creator v4.0")
+        print("  instructions.md (App 전체) | 자동 Knowledge 업데이트")
         print("=" * 70)
 
         # 1. Git 동기화
@@ -710,15 +661,10 @@ git_workspace/
         if not self.generate_filelist():
             return
         
-        # 4. 지침 파일 보장
-        print(f"\n[2/4] 프로젝트 지침 파일 확인 중...")
-        
-        # 4-1. Git에서 project_instructions.md pull
-        if not self.pull_instruction_from_git():
+        # 4. Instructions 동기화
+        print(f"\n[2/4] instructions.md 동기화 중...")
+        if not self.pull_instructions_from_git():
             return
-        
-        # 4-2. 로컬 버전이 없으면 템플릿 생성
-        self.ensure_instruction_file()
         
         # 5. 회차 확인
         iteration = self.get_iteration_count()
@@ -726,7 +672,9 @@ git_workspace/
         
         # 6. Current feedback 추출
         current_feedback = self.extract_current_feedback()
-        if current_feedback:
+        had_feedback = bool(current_feedback)
+        
+        if had_feedback:
             print(f"    → Current feedback 감지됨 (길이: {len(current_feedback)} 자)")
         else:
             print(f"    → Current feedback이 비어있습니다.")
@@ -740,14 +688,14 @@ git_workspace/
         output_path = self.save_output(ai_response, iteration)
         self.log_iteration(iteration, output_path)
         
-        # 9. Knowledge.md 업데이트 (AI 협업)
+        # 9. Knowledge.md 업데이트
         self.update_knowledge_with_ai(iteration, ai_response)
         
-        # 10. project_instructions.md 정리
-        self.rotate_feedback_in_instruction()
+        # 10. instructions.md 정리 (feedback이 있었을 때만)
+        self.rotate_feedback_in_instructions(had_feedback)
         
         # 11. Git Push
-        if not self.push_to_git(output_path):
+        if not self.push_to_git(output_path, had_feedback):
             print("\n" + "=" * 70)
             print(f"  ❌ Git 업로드 실패!")
             print("=" * 70)
@@ -758,8 +706,9 @@ git_workspace/
         print(f"  📁 프로젝트: {self.project_dir}")
         print(f"  📄 결과: {os.path.basename(output_path)}")
         print(f"  📚 Knowledge: 자동 업데이트됨")
-        print(f"  🔄 피드백: 로테이션 완료 (Current → Previous 1/2/3)")
-        print(f"  🚀 다음 단계: Git에서 project_instructions.md 수정 → main.py 실행")
+        if had_feedback:
+            print(f"  🔄 피드백: 로테이션 완료 (Current → Previous)")
+        print(f"  🚀 다음 단계: instructions.md 수정 (로컬/Git) → main.py 실행")
         print("=" * 70)
 
 
