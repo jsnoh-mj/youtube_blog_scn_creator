@@ -578,7 +578,7 @@ class TravelContentOrchestrator:
 
     # ── instructions.md 정리 (피드백 로테이션) ──
     def rotate_feedback_in_instructions(self, had_feedback: bool) -> bool:
-        """Current feedback를 Previous로 로테이션 (비어있으면 스킵)"""
+        """Current feedback를 Previous로 로테이션"""
         
         if not had_feedback:
             print(f"\n[6/4] Current feedback이 비어있습니다. 정리 스킵.")
@@ -587,54 +587,76 @@ class TravelContentOrchestrator:
         print(f"\n[6/4] instructions.md 정리 중...")
         
         if not os.path.exists(self.instructions_path):
+            print(f"    [경고] instructions.md가 없습니다.")
             return True
         
-        with open(self.instructions_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        
-        new_content = content
-        
-        # Previous 3 제거
-        new_content = re.sub(
-            r"\n## Previous - 3 feedback.*?\n(?=## Previous|$)",
-            "",
-            new_content,
-            flags=re.DOTALL
-        )
-        
-        # Previous 2 → Previous 3
-        new_content = new_content.replace(
-            "## Previous - 2 feedback",
-            "## Previous - 3 feedback"
-        )
-        
-        # Previous 1 → Previous 2
-        new_content = new_content.replace(
-            "## Previous - 1 feedback",
-            "## Previous - 2 feedback"
-        )
-        
-        # Current → Previous 1
-        pattern = r"(## Current feedback.*?\n)(.*?)(\n## Previous)"
-        def replace_current(match):
-            current_content = match.group(2)
-            return f"{match.group(1)}{current_content}\n\n## Previous - 1 feedback and request\n{current_content}\n## Previous"
-        
-        new_content = re.sub(pattern, replace_current, new_content, flags=re.DOTALL)
-        
-        # Current 초기화
-        new_content = re.sub(
-            r"## Current feedback.*?\n.*?\n(?=## Previous)",
-            "## Current feedback and request\n(이 섹션에 새로운 요청을 입력하세요)\n\n## Previous",
-            new_content,
-            flags=re.DOTALL
-        )
-        
-        with open(self.instructions_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-        
-        print(f"    → 피드백 로테이션 완료 (Current → Previous 1/2/3)")
-        return True
+        try:
+            with open(self.instructions_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            # 1. Current feedback 내용 추출
+            current_start = content.find("## Current feedback and request")
+            current_end = content.find("## Previous - 1 feedback and request")
+            
+            if current_start == -1 or current_end == -1:
+                print(f"    [경고] 형식이 맞지 않습니다. 정리 스킵.")
+                return True
+            
+            current_content = content[current_start + len("## Current feedback and request"):current_end].strip()
+            
+            # 2. Previous - 1 content 추출
+            prev1_start = content.find("## Previous - 1 feedback and request")
+            prev1_end = content.find("## Previous - 2 feedback and request")
+            
+            if prev1_start == -1:
+                prev1_content = ""
+            else:
+                if prev1_end == -1:
+                    prev1_content = content[prev1_start + len("## Previous - 1 feedback and request"):].strip()
+                else:
+                    prev1_content = content[prev1_start + len("## Previous - 1 feedback and request"):prev1_end].strip()
+            
+            # 3. Previous - 2 content 추출
+            prev2_start = content.find("## Previous - 2 feedback and request")
+            prev2_end = content.find("## Previous - 3 feedback and request")
+            
+            if prev2_start == -1:
+                prev2_content = ""
+            else:
+                if prev2_end == -1:
+                    prev2_content = content[prev2_start + len("## Previous - 2 feedback and request"):].strip()
+                else:
+                    prev2_content = content[prev2_start + len("## Previous - 2 feedback and request"):prev2_end].strip()
+            
+            # 4. 새로운 content 구성
+            new_content = f"""## Current feedback and request
+(이번 작업에 한정) 새로운 요청을 여기에 입력하세요.
+
+## Previous - 1 feedback and request
+{current_content}
+
+## Previous - 2 feedback and request
+{prev1_content}
+
+## Previous - 3 feedback and request
+{prev2_content}
+"""
+            
+            # 5. 파일 저장
+            with open(self.instructions_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            
+            print(f"    → 피드백 로테이션 완료:")
+            print(f"      • Current → Previous 1로 이동")
+            print(f"      • Previous 1 → Previous 2로 이동")
+            print(f"      • Previous 2 → Previous 3로 이동")
+            print(f"      • Previous 3 삭제됨")
+            
+            return True
+            
+        except Exception as e:
+            print(f"    [경고] 로테이션 실패: {str(e)}")
+            return True
 
     # ── Git Push ─────────────────────────────────
     def push_to_git(self, output_path: str, had_feedback: bool) -> bool:
