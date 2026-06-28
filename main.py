@@ -493,16 +493,78 @@ class TravelContentOrchestrator:
             print(f"  3. 모델을 gemini-1.5-flash로 변경 시도")
             return None
 
+    # ── Filelist 요약 생성 ──────────────────────
+    def summarize_filelist(self) -> str:
+        """filelist.md를 간단한 요약으로 변환"""
+        
+        if not os.path.exists(self.filelist_path):
+            return ""
+        
+        with open(self.filelist_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        # 통계 추출
+        lines = content.split("\n")
+        
+        video_count = content.count("🎬 영상")
+        image_count = content.count("📸 사진")
+        total_files = video_count + image_count
+        
+        # 영상 길이 합계
+        total_duration_seconds = 0
+        for line in lines:
+            if "분" in line and "초" in line:
+                try:
+                    # "5분 30초" 형식 파싱
+                    parts = line.split("|")
+                    if len(parts) > 3:
+                        duration_str = parts[3].strip()
+                        if "분" in duration_str:
+                            mins = int(duration_str.split("분")[0])
+                            secs = int(duration_str.split("분")[1].split("초")[0].strip()) if "초" in duration_str else 0
+                            total_duration_seconds += mins * 60 + secs
+                except:
+                    pass
+        
+        total_minutes = total_duration_seconds // 60
+        remaining_seconds = total_duration_seconds % 60
+        
+        # 주요 장소 추출 (파일명에서)
+        locations = []
+        for line in lines:
+            if "|" in line and "파일명" not in line:
+                parts = line.split("|")
+                if len(parts) > 2:
+                    filename = parts[2].strip().strip("`")
+                    # 파일명에서 장소 추출 (첫 번째 부분)
+                    if filename and not filename.startswith("---"):
+                        place = filename.split("_")[0]
+                        if place and place not in locations and place != "순번":
+                            locations.append(place)
+        
+        locations = locations[:3]  # 상위 3개만
+        
+        # 요약 생성
+        summary = f"""## 📋 미디어 요약
+
+**촬영 통계:**
+- 총 파일: {total_files}개 (영상 {video_count}개, 사진 {image_count}개)
+- 총 영상 길이: {total_minutes}분 {remaining_seconds}초
+- 주요 장소: {', '.join(locations) if locations else '없음'}
+
+*상세 파일 목록은 로컬 filelist.md 참고*
+"""
+        
+        return summary
+
     # ── 결과 저장 ────────────────────────────────
     def save_output(self, content: str, iteration: int) -> str:
         """AI 결과를 저장"""
         output_path = self.get_output_path()
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         
-        filelist_content = ""
-        if os.path.exists(self.filelist_path):
-            with open(self.filelist_path, "r", encoding="utf-8") as f:
-                filelist_content = f.read()
+        # 요약된 filelist 생성
+        filelist_summary = self.summarize_filelist()
         
         header = f"""# 🎬 AI 콘텐츠 초안 — 회차 {iteration}
 
@@ -512,9 +574,7 @@ class TravelContentOrchestrator:
 
 ---
 
-## 📋 미디어 타임라인
-
-{filelist_content}
+{filelist_summary}
 
 ---
 
@@ -585,24 +645,33 @@ class TravelContentOrchestrator:
             return True
         
         print(f"\n[6/4] instructions.md 정리 중...")
+        print(f"    → 파일 경로: {self.instructions_path}")
         
         if not os.path.exists(self.instructions_path):
-            print(f"    [경고] instructions.md가 없습니다.")
-            return True
+            print(f"    [오류] instructions.md가 없습니다!")
+            return False
         
         try:
+            # 파일 읽기
             with open(self.instructions_path, "r", encoding="utf-8") as f:
                 content = f.read()
+            
+            print(f"    → 파일 크기: {len(content)} 자")
             
             # 1. Current feedback 내용 추출
             current_start = content.find("## Current feedback and request")
             current_end = content.find("## Previous - 1 feedback and request")
             
+            print(f"    → Current 위치: {current_start} ~ {current_end}")
+            
             if current_start == -1 or current_end == -1:
-                print(f"    [경고] 형식이 맞지 않습니다. 정리 스킵.")
-                return True
+                print(f"    [오류] 형식이 맞지 않습니다!")
+                print(f"    → '## Current feedback and request' 찾음: {current_start != -1}")
+                print(f"    → '## Previous - 1 feedback' 찾음: {current_end != -1}")
+                return False
             
             current_content = content[current_start + len("## Current feedback and request"):current_end].strip()
+            print(f"    → Current 내용 길이: {len(current_content)} 자")
             
             # 2. Previous - 1 content 추출
             prev1_start = content.find("## Previous - 1 feedback and request")
@@ -616,6 +685,8 @@ class TravelContentOrchestrator:
                 else:
                     prev1_content = content[prev1_start + len("## Previous - 1 feedback and request"):prev1_end].strip()
             
+            print(f"    → Previous 1 내용 길이: {len(prev1_content)} 자")
+            
             # 3. Previous - 2 content 추출
             prev2_start = content.find("## Previous - 2 feedback and request")
             prev2_end = content.find("## Previous - 3 feedback and request")
@@ -627,6 +698,8 @@ class TravelContentOrchestrator:
                     prev2_content = content[prev2_start + len("## Previous - 2 feedback and request"):].strip()
                 else:
                     prev2_content = content[prev2_start + len("## Previous - 2 feedback and request"):prev2_end].strip()
+            
+            print(f"    → Previous 2 내용 길이: {len(prev2_content)} 자")
             
             # 4. 새로운 content 구성
             new_content = f"""## Current feedback and request
@@ -646,17 +719,18 @@ class TravelContentOrchestrator:
             with open(self.instructions_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
             
-            print(f"    → 피드백 로테이션 완료:")
-            print(f"      • Current → Previous 1로 이동")
-            print(f"      • Previous 1 → Previous 2로 이동")
-            print(f"      • Previous 2 → Previous 3로 이동")
-            print(f"      • Previous 3 삭제됨")
+            print(f"    ✅ 로테이션 완료:")
+            print(f"      • Current → Previous 1로 이동 ({len(current_content)} 자)")
+            print(f"      • Previous 1 → Previous 2로 이동 ({len(prev1_content)} 자)")
+            print(f"      • Previous 2 → Previous 3로 이동 ({len(prev2_content)} 자)")
             
             return True
             
         except Exception as e:
-            print(f"    [경고] 로테이션 실패: {str(e)}")
-            return True
+            print(f"    [오류] 로테이션 실패: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return False
 
     # ── Git Push ─────────────────────────────────
     def push_to_git(self, output_path: str, had_feedback: bool) -> bool:
