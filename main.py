@@ -19,7 +19,7 @@ def load_config(config_path: str = "config.json") -> dict:
     if not os.path.exists(config_path):
         template = {
             "gemini_api_key": "여기에_실제_AIzaSy_API_키를_입력하세요",
-            "gemini_model": "gemini-2.5-flash",
+            "gemini_model": "gemini-1.5-flash",
             "git_repo_url": "https://github.com/username/repo.git",
             "git_pat": "ghp_여기에_실제_GitHub_PAT_토큰을_입력하세요",
             "git_work_dir": "./git_workspace",
@@ -76,14 +76,14 @@ def input_target_dir() -> str:
 
 
 # ─────────────────────────────────────────────
-#  여행 콘텐츠 오케스트레이터 v4.0
+#  여행 콘텐츠 오케스트레이터 v4.1 최종
 # ─────────────────────────────────────────────
 class TravelContentOrchestrator:
     def __init__(self, cfg: dict, target_dir: str):
         self.cfg = cfg
         self.target_dir = target_dir
         self.projects_dir = cfg.get("projects_dir", "./projects")
-        self.model_name = cfg.get("gemini_model", "gemini-2.5-flash")
+        self.model_name = cfg.get("gemini_model", "gemini-1.5-flash")
         self.temperature = cfg.get("temperature", 0.3)
         
         self.git_repo_url = cfg.get("git_repo_url")
@@ -357,17 +357,45 @@ class TravelContentOrchestrator:
 """
 
         try:
+            print(f"    → 시스템 명령어 길이: {len(system_instruction)} 자")
+            print(f"    → 사용자 프롬프트 길이: {len(user_prompt)} 자")
+            
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=user_prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
-                    temperature=self.temperature
+                    temperature=self.temperature,
+                    max_output_tokens=8192
                 )
             )
+            
+            print(f"    → API 응답 길이: {len(response.text)} 자")
+            
+            # 응답이 완전한지 확인
+            if hasattr(response, 'candidates') and len(response.candidates) > 0:
+                finish_reason = response.candidates[0].finish_reason
+                print(f"    → 완료 상태: {finish_reason}")
+                
+                if finish_reason == "MAX_TOKENS":
+                    print(f"    [⚠️ 경고] 응답이 최대 길이에서 잘렸습니다!")
+                    print(f"    → config.json의 temperature를 낮추거나 filelist.md의 파일 수를 줄려보세요")
+            
+            if len(response.text) < 500:
+                print(f"    [경고] 응답이 너무 짧습니다 ({len(response.text)} 자)")
+                print(f"    → 네트워크 문제 또는 API 한도 초과 가능성")
+            
             return response.text
+            
         except Exception as e:
-            print(f"[API 오류] {e}")
+            print(f"\n[API 오류] 상세 정보:")
+            print(f"  → 오류 타입: {type(e).__name__}")
+            print(f"  → 오류 메시지: {str(e)}")
+            print(f"  → 모델: {self.model_name}")
+            print(f"\n[해결 방법]")
+            print(f"  1. https://ai.google.com/rate-limit 에서 사용량 확인")
+            print(f"  2. API 한도 초과 시 내일 자정까지 대기")
+            print(f"  3. 모델을 gemini-1.5-flash로 변경 시도")
             return None
 
     # ── 결과 저장 ────────────────────────────────
@@ -436,7 +464,8 @@ class TravelContentOrchestrator:
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.3
+                    temperature=0.3,
+                    max_output_tokens=1024
                 )
             )
             
@@ -448,14 +477,14 @@ class TravelContentOrchestrator:
             print(f"    → knowledge.md 업데이트 완료")
             return True
         except Exception as e:
-            print(f"    [경고] knowledge.md 업데이트 실패: {e}")
+            print(f"    [경고] knowledge.md 업데이트 실패: {str(e)}")
+            print(f"    → 계속 진행합니다...")
             return True
 
     # ── instructions.md 정리 (피드백 로테이션) ──
     def rotate_feedback_in_instructions(self, had_feedback: bool) -> bool:
         """Current feedback를 Previous로 로테이션 (비어있으면 스킵)"""
         
-        # Current feedback이 비어있었으면 정리 불필요
         if not had_feedback:
             print(f"\n[6/4] Current feedback이 비어있습니다. 정리 스킵.")
             return True
@@ -645,7 +674,7 @@ git_workspace/
     # ── 전체 파이프라인 ──────────────────────────
     def run(self):
         print("=" * 70)
-        print("  🏔️  YouTube Blog Scene Creator v4.0")
+        print("  🏔️  YouTube Blog Scene Creator v4.1 (최종)")
         print("  instructions.md (App 전체) | 자동 Knowledge 업데이트")
         print("=" * 70)
 
