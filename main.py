@@ -641,6 +641,20 @@ class TravelContentOrchestrator:
         """Knowledge.md와 instructions.md를 git에 push"""
         print(f"\n[Git] 최종 업로드 중...")
         
+        # Push 전에 pull 실행 (remote 변경사항 가져오기)
+        print(f"    → Git pull (최신 커밋 가져오기)...")
+        result = subprocess.run(
+            ["git", "-C", self.git_work_dir, "pull"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            encoding="utf-8"
+        )
+        if result.returncode != 0:
+            print(f"[Git Pull 실패] {result.stderr}")
+            return False
+        print(f"    → Pull 완료")
+        
         files_to_push = [os.path.basename(output_path)]
         
         # 결과 파일을 git_workspace로 복사
