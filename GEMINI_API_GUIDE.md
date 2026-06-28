@@ -66,7 +66,7 @@ Choose a project (or create a new one):
 ✅ API key created successfully!
 
 ┌──────────────────────────────────┐
-│ AIzaSy1a2b3c4d5e6f7g8h9i0j1k2l3  │
+│ AIzaSy......................l3  │
 │                        [복사 아이콘] │
 └──────────────────────────────────┘
 
@@ -80,7 +80,7 @@ Created: 2026-06-27 14:30:00 UTC
 
 ```
 ┌──────────────────────────────────────────┐
-│ AIzaSy1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7 │
+│ AIza...........................m4n5o6p7 │
 │                              [복사 아이콘] │
 └──────────────────────────────────────────┘
 ```
@@ -120,7 +120,7 @@ API 키를 발급받은 후:
 
 ```json
 {
-  "gemini_api_key": "AIzaSy1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7",
+  "gemini_api_key": "AIzaSy1...............3m4n5o6p7",
   "gemini_model": "gemini-2.5-flash",
   "git_repo_url": "https://github.com/username/repo.git",
   "git_pat": "ghp_...",
